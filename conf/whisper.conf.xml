@@ -1,0 +1,7 @@
+<configuration name="whisper.conf" description="Whisper ASR Configuration">
+  <settings>
+    <param name="server-url" value="ws://127.0.0.1:2700"/>
+    <param name="return-json" value="1"/>
+  </settings>
+</configuration>
+
