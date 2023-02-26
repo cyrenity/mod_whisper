@@ -194,8 +194,6 @@ static switch_status_t whisper_close(switch_asr_handle_t *ah, switch_asr_flag_t 
 
 	switch_mutex_lock(context->mutex);
 
-	switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_INFO, "ASR closed initt\n");
-
 	/** FIXME: websockets server still expects us to read the close confirmation and only then close
 	    libks library doens't implement it yet. */
 	kws_close(context->ws, KWS_CLOSE_SOCK);
@@ -203,7 +201,6 @@ static switch_status_t whisper_close(switch_asr_handle_t *ah, switch_asr_flag_t 
 
 	switch_set_flag(ah, SWITCH_ASR_FLAG_CLOSED);
 	switch_buffer_destroy(&context->audio_buffer);
-	//switch_safe_free(vosk->result);
 	switch_mutex_unlock(context->mutex);
 
 
@@ -231,10 +228,7 @@ static switch_status_t whisper_feed(switch_asr_handle_t *ah, void *data, unsigne
 	int poll_result;
 	kws_opcode_t oc;
 	uint8_t *rdata;
-	uint8_t *rrdata;
 	int rlen;
-	int rrlen;
-	kws_opcode_t roc;
 	
 	if (switch_test_flag(ah, SWITCH_ASR_FLAG_CLOSED)) {
 		return SWITCH_STATUS_BREAK;
@@ -267,7 +261,7 @@ static switch_status_t whisper_feed(switch_asr_handle_t *ah, void *data, unsigne
 				}
 			} 
 
-			poll_result = kws_wait_sock(context->ws, 0, KS_POLL_READ | KS_POLL_ERROR);
+			poll_result = kws_wait_sock(context->ws, 5, KS_POLL_READ | KS_POLL_ERROR);
 
 			if (poll_result != KS_POLL_READ) {
 				switch_mutex_unlock(context->mutex);
@@ -305,29 +299,33 @@ static switch_status_t whisper_feed(switch_asr_handle_t *ah, void *data, unsigne
 			switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_ERROR, "%s\n", req_string);
 			
 			if (kws_write_frame(context->ws, WSOC_TEXT, req_string, sizeof req_string) < 0) {
+				switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_ERROR, "Unable to send EOF string");
+
 				switch_mutex_unlock(context->mutex);
 				return SWITCH_STATUS_BREAK;
 			}
 
 			ks_json_delete(&req);
 
-			poll_result = kws_wait_sock(context->ws, 1, KS_POLL_READ | KS_POLL_ERROR);
+			poll_result = kws_wait_sock(context->ws, 10000, KS_POLL_READ | KS_POLL_ERROR);
 
 			if (poll_result != KS_POLL_READ) {
+				switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_ERROR, "Unable to poll for final message");
+				switch_mutex_unlock(context->mutex);
+				return SWITCH_STATUS_BREAK;			
+			}
+
+			rlen = kws_read_frame(context->ws, &oc, &rdata);
+
+			if (rlen < 0) {
+				switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_ERROR, "Final message length is not acceptable");
 				switch_mutex_unlock(context->mutex);
 				return SWITCH_STATUS_BREAK;
 			}
 
-			rrlen = kws_read_frame(context->ws, &roc, &rrdata);
+			switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_ERROR, "Final response is %d bytes:\n%s\n", rlen, rdata);
 
-			if (rrlen < 0) {
-				switch_mutex_unlock(context->mutex);
-				return SWITCH_STATUS_BREAK;
-			}
-
-			switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_ERROR, "final response is %d bytes:\n%s\n", rrlen, rrdata);
-
-			context->result_text = switch_safe_strdup((const char *)rrdata);
+			context->result_text = switch_safe_strdup((const char *)rdata);
 
 			switch_mutex_unlock(context->mutex);
 
