@@ -1,65 +1,67 @@
 #!/usr/bin/env python3
 
-import json
+import numpy as np
 import os
 import sys
 import asyncio
-import pathlib
 import websockets
 import concurrent.futures
 import logging
-import time
-
-import wave
-import math
-import random
-import struct
-
+import os
 import whisper
 
+# Load model
 model = whisper.load_model("base")
-
-
-
-samplerate = 44100
 
 
 def process_chunk(message):
     print(message[:20], type(message))
-
-    test_file=open('/tmp/raw.bin','ab')
-
-    if type(message) is str:
-        test_file.close()
-        time.sleep(1)
-        return "Final Response", True
+    
+    if type(message) is str and 'uuid' in message:
+        return None, False
+    elif type(message) is str and 'eof' in message:
+        return None, True
     else:
-        if type(message) is bytes:
-            test_file.write(message)
-        return "Partial Response ...", False    
+        audio = np.frombuffer(message, np.int16).astype(np.float32)*(1/32768.0)
+        return audio, False    
     
     
-async def recognize(websocket, path):
+async def recognize(websocket):
     global args
     global pool
+    full_audio_bytes = np.array([])
 
     loop = asyncio.get_running_loop()
-    rec = None
-    phrase_list = None
-    sample_rate = args.sample_rate
-    show_words = args.show_words
-    max_alternatives = args.max_alternatives
 
     logging.info('Connection from %s', websocket.remote_address);
 
     while True:
         message = await websocket.recv()
-            
         response, stop = await loop.run_in_executor(pool, process_chunk, message)
-        print('response', response)
-        await websocket.send(response)
+
+        if response is not None:
+            full_audio_bytes = np.append(full_audio_bytes, response)
+            print('response', response)
+            
         
-        if stop: break
+        if stop: 
+            full_audio_bytes = whisper.pad_or_trim(full_audio_bytes)
+
+            # make log-Mel spectrogram and move to the same device as the model
+            mel = whisper.log_mel_spectrogram(full_audio_bytes.astype(np.float32)).to(model.device)
+
+            # detect the spoken language
+            _, probs = model.detect_language(mel)
+            print(f"Detected language: {max(probs, key=probs.get)}")
+
+            # decode the audio
+            options = whisper.DecodingOptions(language="en", fp16 = False, prompt="pizza food address toppings take away delivery rider order status track my order")
+            result = whisper.decode(model, mel, options)
+            print(f"Result: {result.text}")
+            
+            await websocket.send(result.text)
+
+            break
     
 
 
@@ -88,6 +90,15 @@ async def start():
     if len(sys.argv) > 1:
        args.model_path = sys.argv[1]
 
+    # Gpu part, uncomment if WHISPER-api has gpu support
+    #
+    # from WHISPER import GpuInit, GpuInstantiate
+    # GpuInit()
+    # def thread_init():
+    #     GpuInstantiate()
+    # pool = concurrent.futures.ThreadPoolExecutor(initializer=thread_init)
+
+
     pool = concurrent.futures.ThreadPoolExecutor((os.cpu_count() or 1))
 
     async with websockets.serve(recognize, args.interface, args.port):
@@ -96,4 +107,3 @@ async def start():
 
 if __name__ == '__main__':
     asyncio.run(start())
-
