@@ -9,20 +9,21 @@ import concurrent.futures
 import logging
 import os
 import whisper
+import json
 
 # Load model
 model = whisper.load_model("base")
 
 
 def process_chunk(message):
-    print(message[:20], type(message))
-    
     if type(message) is str and 'uuid' in message:
         return None, False
+    elif type(message) is str and 'grammar' in message:
+        return message, False
     elif type(message) is str and 'eof' in message:
         return None, True
     else:
-        audio = np.frombuffer(message, np.int16).astype(np.float32)*(1/32768.0)
+        audio = np.frombuffer(message, np.int16)
         return audio, False    
     
     
@@ -30,6 +31,7 @@ async def recognize(websocket):
     global args
     global pool
     full_audio_bytes = np.array([])
+    prompt_grammar = ""
 
     loop = asyncio.get_running_loop()
 
@@ -38,8 +40,14 @@ async def recognize(websocket):
     while True:
         message = await websocket.recv()
         response, stop = await loop.run_in_executor(pool, process_chunk, message)
-
-        if response is not None:
+    
+        if type(response) == str:
+            print('text response', response)
+            if 'grammar' in response:
+                grammar = json.loads(response)
+                prompt_grammar = grammar['grammar']
+            
+        if type(response) == np.ndarray:
             full_audio_bytes = np.append(full_audio_bytes, response)
             print('response', response)
             
@@ -48,20 +56,20 @@ async def recognize(websocket):
             full_audio_bytes = whisper.pad_or_trim(full_audio_bytes)
 
             # make log-Mel spectrogram and move to the same device as the model
-            mel = whisper.log_mel_spectrogram(full_audio_bytes.astype(np.float32)).to(model.device)
+            mel = whisper.log_mel_spectrogram(full_audio_bytes.astype(np.float32)*(1/32768.0)).to(model.device)
 
             # detect the spoken language
             _, probs = model.detect_language(mel)
             print(f"Detected language: {max(probs, key=probs.get)}")
 
             # decode the audio
-            options = whisper.DecodingOptions(language="en", fp16 = False, prompt="pizza food address toppings take away delivery rider order status track my order")
+            options = whisper.DecodingOptions(language="en", fp16 = False, prompt=prompt_grammar)
             result = whisper.decode(model, mel, options)
             print(f"Result: {result.text}")
             
             await websocket.send(result.text)
-
-            break
+            full_audio_bytes = np.array([])
+            #break
     
 
 
