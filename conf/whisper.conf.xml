@@ -1,7 +1,7 @@
-<configuration name="whisper.conf" description="Whisper ASR Configuration">
+<configuration name="whisper.conf" description="Whisper ASR-TTS Configuration">
   <settings>
-    <param name="server-url" value="ws://127.0.0.1:2700"/>
+    <param name="asr-server-url" value="ws://127.0.0.1:2700"/>
+    <param name="tts-server-url" value="ws://127.0.0.1:2600"/>
     <param name="return-json" value="1"/>
   </settings>
 </configuration>
-
