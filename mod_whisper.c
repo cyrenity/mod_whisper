@@ -100,7 +100,7 @@ typedef struct {
 
 static switch_status_t whisper_send_text_websocket(whisper_t *context, char *text) 
 {
-	switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_ERROR, "text: %s -- %ld\n", text, strlen(text));
+	switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "text: %s\n", text);
 	
 	if (kws_write_frame(context->ws, WSOC_TEXT, text, strlen(text)) < 0) {
 		switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_ERROR, "Unable to send string");
@@ -683,17 +683,14 @@ static switch_status_t whisper_speech_feed_tts(switch_speech_handle_t *sh, char 
 
 
 	rlen = kws_read_frame(context->ws, &oc, &rdata); 
-	switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_ERROR, "%d\n", rlen);
+
 	if (rlen < 0) {
 		switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_ERROR, "Final message length is not acceptable");
 		return SWITCH_STATUS_BREAK;
 	}
-
-	switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_ERROR, "%d", oc);
-
+	
 	switch_buffer_write(context->audio_buffer, rdata, rlen);
 
-	
 	return SWITCH_STATUS_SUCCESS;
 }
 
@@ -702,16 +699,12 @@ static switch_status_t whisper_speech_read_tts(switch_speech_handle_t *sh, void 
 	whisper_tts_t *context = (whisper_tts_t *)sh->private_info;
 	size_t bytes_read;
 	
-
-	switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_ERROR, "Data length: %lu \n", *datalen);
 	if ( (bytes_read = switch_buffer_read(context->audio_buffer, data, *datalen)) ) {
 		*datalen = bytes_read ;
 		return SWITCH_STATUS_SUCCESS;
 	}
 
 	return SWITCH_STATUS_FALSE;
-
-
 }
 
 static void whisper_speech_flush_tts(switch_speech_handle_t *sh)

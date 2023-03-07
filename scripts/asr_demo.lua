@@ -51,13 +51,13 @@ session:answer();
 
 
 -- Define the TTS engine
---session:set_tts_params("yytts", "zhilingf");
+session:set_tts_params("whisper", "zhilingf");
 -- Register the input callback
 session:setInputCallback("onInput");
 -- Sleep a little bit to get media time to be fully up
 session:sleep(100);
---session:speak("我是原语智能的电话系统，请说");
-session:execute("playback", ivr_sound);
+session:speak("Do you want takeaway or delivery");
+--session:execute("playback", ivr_sound);
 session:execute("detect_speech", "whisper pizza delivery");
 local caller_id_number = session:getVariable("caller_id_number");
 
@@ -67,13 +67,20 @@ while ( session:ready() == true ) do
         session:sleep(20);
         freeswitch.consoleLog("debug", " Lets  sleep over the channel because there is no asr_text\n");
     elseif ( asr_text == "" ) then
-        -- session:speak("没听清你说什么哦，请再说一遍");
-	session:execute("playback", ivr_sound_2);
+        session:speak("Again, do you want takeaway or delivery?");
         asr_text = nil;
         freeswitch.consoleLog("debug", " Lets resume detection again because there is empty asr_text \n");
         session:execute("detect_speech", "resume");
     else
         -- do your NLU here ?
+	--
+	if string.find(asr_text, "eliver") then
+            session:speak("Ok, what is your address?");
+	elseif string.find(asr_text, "way") then
+            session:speak("Ok, Please tell me your order?");
+	else
+            session:speak("I am sorry i couldn't understand it");
+	end
 
         -- echo back the recognition result
         freeswitch.consoleLog("info", asr_text);
