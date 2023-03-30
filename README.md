@@ -1,6 +1,6 @@
 # mod_whisper
 
-A FreeSWITCH module to interface to your speech recognition server over websockets
+A FreeSWITCH module to interface to your speech recognition & TTS server over websockets
 
 ## How to setup
 
