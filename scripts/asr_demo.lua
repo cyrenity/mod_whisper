@@ -51,7 +51,7 @@ session:answer();
 
 
 -- Define the TTS engine
-session:set_tts_params("whisper", "zhilingf");
+session:set_tts_params("whisper", "mustafa");
 -- Register the input callback
 session:setInputCallback("onInput");
 -- Sleep a little bit to get media time to be fully up
