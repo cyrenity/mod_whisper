@@ -486,7 +486,9 @@ static switch_status_t whisper_get_results(switch_asr_handle_t *ah, char **resul
 		int is_partial = context->partial-- > 0 ? 1 : 0;
 
 		//*resultstr = switch_mprintf("{\"grammar\": \"%s\", \"text\": \"%s\", \"confidence\": %f}", context->grammar, context->result_text, context->result_confidence);
+
 		*resultstr = context->result_text;
+
 		switch_log_printf(SWITCH_CHANNEL_UUID_LOG(context->channel_uuid), SWITCH_LOG_NOTICE, "%sResult: %s\n", is_partial ? "Partial " : "Final ", *resultstr);
 
 		if (is_partial) {
@@ -683,7 +685,7 @@ static switch_status_t whisper_speech_feed_tts(switch_speech_handle_t *sh, char 
 		switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_ERROR, "Final message length is not acceptable");
 		return SWITCH_STATUS_BREAK;
 	}
-	
+
 	switch_buffer_write(context->audio_buffer, rdata, rlen);
 
 	return SWITCH_STATUS_SUCCESS;
@@ -693,7 +695,7 @@ static switch_status_t whisper_speech_read_tts(switch_speech_handle_t *sh, void 
 {
 	whisper_tts_t *context = (whisper_tts_t *)sh->private_info;
 	size_t bytes_read;
-	
+
 	if ( (bytes_read = switch_buffer_read(context->audio_buffer, data, *datalen)) ) {
 		*datalen = bytes_read ;
 		return SWITCH_STATUS_SUCCESS;
