@@ -82,7 +82,6 @@ static struct {
 	char *asr_server_url;
 	char *tts_server_url;
 	int return_json;
-
 	int auto_reload;
 	switch_memory_pool_t *pool;
 	ks_pool_t *ks_pool;
@@ -91,7 +90,7 @@ static struct {
 typedef struct {
 	char *text;
 	char *voice;
-	int samples;
+	int samplerate;
 	const char *channel_uuid;
 	switch_memory_pool_t *pool;
 	switch_buffer_t *audio_buffer;
@@ -408,7 +407,6 @@ static switch_status_t whisper_feed(switch_asr_handle_t *ah, void *data, unsigne
 		}
 	}
 
-
 	return status;
 }
 
@@ -487,8 +485,8 @@ static switch_status_t whisper_get_results(switch_asr_handle_t *ah, char **resul
 	if (switch_test_flag(context, ASRFLAG_RESULT)) {
 		int is_partial = context->partial-- > 0 ? 1 : 0;
 
-		*resultstr = switch_mprintf("{\"grammar\": \"%s\", \"text\": \"%s\", \"confidence\": %f}", context->grammar, context->result_text, context->result_confidence);
-
+		//*resultstr = switch_mprintf("{\"grammar\": \"%s\", \"text\": \"%s\", \"confidence\": %f}", context->grammar, context->result_text, context->result_confidence);
+		*resultstr = context->result_text;
 		switch_log_printf(SWITCH_CHANNEL_UUID_LOG(context->channel_uuid), SWITCH_LOG_NOTICE, "%sResult: %s\n", is_partial ? "Partial " : "Final ", *resultstr);
 
 		if (is_partial) {
@@ -601,13 +599,10 @@ static switch_status_t whisper_speech_open(switch_speech_handle_t *sh, const cha
     if ( voice_name ) {
         context->voice = switch_core_strdup(sh->memory_pool, voice_name);
     } else {
-        context->voice = "mustafa";
+        context->voice = "default";
     }
 
-	context->samples = sh->samplerate;
-
-
-	//sh->native_rate = 8000;
+	context->samplerate = sh->samplerate;
 	
 	context->pool = sh->memory_pool;
 
@@ -662,7 +657,7 @@ static switch_status_t whisper_speech_feed_tts(switch_speech_handle_t *sh, char 
 //
 //		if (p) {
 //			p += strlen("silence://");
-//			context->samples = atoi(p) * sh->samplerate / 1000;
+//			context->samplerate = atoi(p) * sh->samplerate / 1000;
 //		}
 
 		context->text = switch_core_strdup(sh->memory_pool, text);
