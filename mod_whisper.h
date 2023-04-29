@@ -5,7 +5,6 @@
 #include <netinet/tcp.h>
 #include <libks/ks.h>
 
-
 #define AUDIO_BLOCK_SIZE 3200
 #define SPEECH_BUFFER_SIZE 49152
 #define SPEECH_BUFFER_SIZE_MAX 4194304
@@ -42,9 +41,7 @@ typedef struct {
 	int partial;
 } whisper_t;
 
-static switch_mutex_t *MUTEX = NULL;
-static switch_event_node_t *NODE = NULL;
-static struct {
+struct {
 	char *asr_server_url;
 	char *tts_server_url;
 	int return_json;
@@ -62,6 +59,5 @@ typedef struct {
 	switch_buffer_t *audio_buffer;
 	kws_t *ws;
 } whisper_tts_t;
-
 
 #endif

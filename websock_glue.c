@@ -1,7 +1,7 @@
+#include "mod_whisper.h"
 #include "websock_glue.h"
 
-
-static switch_status_t ws_send_text(kws_t *websocket, char *text) 
+switch_status_t ws_send_text(kws_t *websocket, char *text) 
 {
 	switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "text: %s\n", text);
 	
@@ -14,7 +14,7 @@ static switch_status_t ws_send_text(kws_t *websocket, char *text)
 	return SWITCH_STATUS_SUCCESS;
 }
 
-static switch_status_t ws_send_json(kws_t *websocket, ks_json_t *json_object) 
+switch_status_t ws_send_json(kws_t *websocket, ks_json_t *json_object) 
 {
 	char *request_str = NULL;
 
@@ -25,7 +25,7 @@ static switch_status_t ws_send_json(kws_t *websocket, ks_json_t *json_object)
 	return ws_send_text(websocket, request_str);
 }
 
-static switch_status_t whisper_get_final_transcription(whisper_t *context)
+switch_status_t whisper_get_final_transcription(whisper_t *context)
 {
 	int poll_result;
 	kws_opcode_t oc;
@@ -61,10 +61,7 @@ static switch_status_t whisper_get_final_transcription(whisper_t *context)
 	return SWITCH_STATUS_SUCCESS;
 }
 
-
-
-
-static switch_status_t whisper_get_speech_synthesis(whisper_tts_t *context)
+switch_status_t whisper_get_speech_synthesis(whisper_tts_t *context)
 {
 	int poll_result;
 	kws_opcode_t oc;
@@ -81,7 +78,6 @@ static switch_status_t whisper_get_speech_synthesis(whisper_tts_t *context)
 			break; 
 		}
 	}
-
 
 	rlen = kws_read_frame(context->ws, &oc, &rdata); 
 
