@@ -97,65 +97,96 @@ typedef struct {
 	kws_t *ws;
 } whisper_tts_t;
 
-static switch_status_t whisper_send_text_websocket(whisper_t *context, char *text) 
+static switch_status_t ws_send_text(kws_t *websocket, char *text) 
 {
 	switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "text: %s\n", text);
 	
-	if (kws_write_frame(context->ws, WSOC_TEXT, text, strlen(text)) < 0) {
+	if (kws_write_frame(websocket, WSOC_TEXT, text, strlen(text)) < 0) {
 		switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_ERROR, "Unable to send string");
 
-		switch_mutex_unlock(context->mutex);
 		return SWITCH_STATUS_BREAK;
 	}
 
 	return SWITCH_STATUS_SUCCESS;
 }
 
-static switch_status_t whisper_send_final_asr_request(whisper_t *context)
+static switch_status_t ws_send_json(kws_t *websocket, ks_json_t *json_object) 
+{
+	char *request_str = NULL;
+
+	request_str = ks_json_print_unformatted(json_object);
+
+	switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "Sending json string to websocket server %s\n", request_str);
+
+	return ws_send_text(websocket, request_str);
+}
+
+static switch_status_t whisper_get_final_transcription(whisper_t *context)
 {
 	int poll_result;
 	kws_opcode_t oc;
 	uint8_t *rdata;
 	int rlen;
-	char req_string[50] = "";
 	ks_json_t *req = ks_json_create_object();
 
 	ks_json_add_string_to_object(req, "eof", "true");
 
-	strcpy(req_string, ks_json_print_unformatted(req));
-
-	switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "Sending stop talking bit %s\n", req_string);
-
-	if (kws_write_frame(context->ws, WSOC_TEXT, req_string, sizeof req_string) < 0) {
-		switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_ERROR, "Unable to send stop talking bit");
-
-		switch_mutex_unlock(context->mutex);
+	if (ws_send_json(context->ws, req) != SWITCH_STATUS_SUCCESS) {
+		ks_json_delete(&req);
 		return SWITCH_STATUS_BREAK;
 	}
 
 	ks_json_delete(&req);
 
-	poll_result = kws_wait_sock(context->ws, 60000, KS_POLL_READ | KS_POLL_ERROR);
-
-	if (poll_result != KS_POLL_READ) {
-		switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_ERROR, "Unable to poll for final message");
-		switch_mutex_unlock(context->mutex);
-		return SWITCH_STATUS_BREAK;
+	while (1) {
+		poll_result = kws_wait_sock(context->ws, 50, KS_POLL_READ | KS_POLL_ERROR);
+		if (poll_result == KS_POLL_READ) { 
+			break; 
+		}
 	}
 
 	rlen = kws_read_frame(context->ws, &oc, &rdata);
 
 	if (rlen < 0) {
-		switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_ERROR, "Final message length is not acceptable");
-		switch_mutex_unlock(context->mutex);
+		switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_ERROR, "Message length is not acceptable");
 		return SWITCH_STATUS_BREAK;
 	}
 
-	switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_INFO, "Final response is %d bytes:%s\n", rlen, rdata);
-
 	context->result_text = switch_safe_strdup((const char *)rdata);
 
-	switch_mutex_unlock(context->mutex);
+	return SWITCH_STATUS_SUCCESS;
+}
+
+
+
+
+static switch_status_t whisper_get_speech_synthesis(whisper_tts_t *context)
+{
+	int poll_result;
+	kws_opcode_t oc;
+	uint8_t *rdata;
+	int rlen;
+
+	if (ws_send_text(context->ws, context->text) != SWITCH_STATUS_SUCCESS) {
+		return SWITCH_STATUS_BREAK;
+	}
+
+	while (1) {
+		poll_result = kws_wait_sock(context->ws, 50, KS_POLL_READ | KS_POLL_ERROR);
+		if (poll_result == KS_POLL_READ) { 
+			break; 
+		}
+	}
+
+
+	rlen = kws_read_frame(context->ws, &oc, &rdata); 
+
+	if (rlen < 0) {
+		switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_ERROR, "Message length is not acceptable");
+		return SWITCH_STATUS_BREAK;
+	}
+
+	switch_buffer_write(context->audio_buffer, rdata, rlen);
 
 	return SWITCH_STATUS_SUCCESS;
 }
@@ -191,8 +222,6 @@ static switch_status_t whisper_open(switch_asr_handle_t *ah, const char *codec, 
 		return SWITCH_STATUS_MEMERR;
 	}
 
-	switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_INFO, "codec = %s, rate = %d, dest = %s\n", codec, rate, dest);
-
 	ah->private_info = context;
 	codec = "L16";
 	ah->codec = switch_core_strdup(ah->memory_pool, codec);
@@ -204,7 +233,7 @@ static switch_status_t whisper_open(switch_asr_handle_t *ah, const char *codec, 
 	switch_mutex_init(&context->mutex, SWITCH_MUTEX_NESTED, ah->memory_pool);
 
 	if (switch_buffer_create_dynamic(&context->audio_buffer, AUDIO_BLOCK_SIZE, AUDIO_BLOCK_SIZE, 0) != SWITCH_STATUS_SUCCESS) {
-		switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_ERROR, "Buffer create failed\n");
+		switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_ERROR, "Failed to create the audio buffer\n");
 		return SWITCH_STATUS_MEMERR;
 	}
 
@@ -213,6 +242,7 @@ static switch_status_t whisper_open(switch_asr_handle_t *ah, const char *codec, 
 		switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_ERROR, "Websocket connect to %s failed\n", globals.asr_server_url);
 		return SWITCH_STATUS_GENERR;
 	}
+
 	ks_json_delete(&req);
 
 	context->thresh = 400;
@@ -257,7 +287,7 @@ static switch_status_t whisper_load_grammar(switch_asr_handle_t *ah, const char 
 	strcpy(req_string, ks_json_print_unformatted(req));
 
 
-	if (whisper_send_text_websocket(context, req_string) != SWITCH_STATUS_SUCCESS) {
+	if (ws_send_text(context->ws, req_string) != SWITCH_STATUS_SUCCESS) {
 		switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_ERROR, "Unable to send grammar to websocket server\n");
 	}
 	
@@ -322,14 +352,14 @@ static switch_status_t whisper_feed(switch_asr_handle_t *ah, void *data, unsigne
 	}
 
 	if (switch_test_flag(context, ASRFLAG_TIMEOUT)) {
-
 		switch_status_t ws_status;
 
-		ws_status = whisper_send_final_asr_request(context);
-
+		ws_status = whisper_get_final_transcription(context);
+		
 		if (ws_status != SWITCH_STATUS_SUCCESS) {
 			return SWITCH_STATUS_BREAK;
 		}
+			
 
 		//set vad flags to stop detection
 		switch_set_flag(context, ASRFLAG_RESULT);
@@ -388,13 +418,12 @@ static switch_status_t whisper_feed(switch_asr_handle_t *ah, void *data, unsigne
 
 		if (vad_state == SWITCH_VAD_STATE_STOP_TALKING) {
 			switch_status_t ws_status;
-
-			ws_status = whisper_send_final_asr_request(context);
-
+			ws_status = whisper_get_final_transcription(context);
+			
 			if (ws_status != SWITCH_STATUS_SUCCESS) {
 				return SWITCH_STATUS_BREAK;
 			}
-
+				
 			//set vad flags to stop detection
 			switch_set_flag(context, ASRFLAG_RESULT);
 			switch_vad_reset(context->vad);
@@ -644,11 +673,8 @@ static switch_status_t whisper_speech_close(switch_speech_handle_t *sh, switch_s
 
 static switch_status_t whisper_speech_feed_tts(switch_speech_handle_t *sh, char *text, switch_speech_flag_t *flags)
 {
-	int poll_result;
-	kws_opcode_t oc;
-	uint8_t *rdata;
-	int rlen;
 	whisper_tts_t *context = (whisper_tts_t *)sh->private_info;
+	switch_status_t ws_status;
 
 	if (switch_true(switch_core_get_variable("mod_whisper_tts_must_have_channel_uuid")) && zstr(context->channel_uuid)) {
 		return SWITCH_STATUS_FALSE;
@@ -666,27 +692,11 @@ static switch_status_t whisper_speech_feed_tts(switch_speech_handle_t *sh, char 
 	}
 
 
-	if (kws_write_frame(context->ws, WSOC_TEXT, text, strlen(text)) < 0) {
-		switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_ERROR, "Unable to send string");
+	ws_status = whisper_get_speech_synthesis(context);
+
+	if (ws_status != SWITCH_STATUS_SUCCESS) {
 		return SWITCH_STATUS_BREAK;
 	}
-
-	poll_result = kws_wait_sock(context->ws, 60000, KS_POLL_READ | KS_POLL_ERROR);
-
-	if (poll_result != KS_POLL_READ) {
-		switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_ERROR, "Unable to poll for final message");
-		return SWITCH_STATUS_BREAK;
-	}
-
-
-	rlen = kws_read_frame(context->ws, &oc, &rdata); 
-
-	if (rlen < 0) {
-		switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_ERROR, "Final message length is not acceptable");
-		return SWITCH_STATUS_BREAK;
-	}
-
-	switch_buffer_write(context->audio_buffer, rdata, rlen);
 
 	return SWITCH_STATUS_SUCCESS;
 }
