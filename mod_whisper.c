@@ -34,6 +34,8 @@
 #include "mod_whisper.h"
 #include "websock_glue.h"
 
+struct whisper_globals whisper_globals;
+
 switch_mutex_t *MUTEX = NULL;
 switch_event_node_t *NODE = NULL;
 
@@ -60,9 +62,15 @@ static void whisper_reset(whisper_t *context)
 static switch_status_t whisper_open(switch_asr_handle_t *ah, const char *codec, int rate, const char *dest, switch_asr_flag_t *flags)
 {
 	whisper_t *context;
+	char *session_uuid = NULL;
+	switch_core_session_t *session = switch_core_memory_pool_get_data(ah->memory_pool, "__session");
 	ks_json_t *req = ks_json_create_object();
-	ks_json_add_string_to_object(req, "url", (dest ? dest : globals.asr_server_url));
+	ks_json_add_string_to_object(req, "url", (dest ? dest : whisper_globals.asr_server_url));
 
+	if (session) {
+		session_uuid = switch_core_session_get_uuid(session);
+		switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "Get session data in whisper_open %s\n", session_uuid);
+	}
 
 	if (switch_test_flag(ah, SWITCH_ASR_FLAG_CLOSED)) {
 		switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "asr_open attempt on CLOSED asr handle\n");
@@ -88,9 +96,9 @@ static switch_status_t whisper_open(switch_asr_handle_t *ah, const char *codec, 
 		return SWITCH_STATUS_MEMERR;
 	}
 
-	if (kws_connect_ex(&context->ws, req, KWS_BLOCK | KWS_CLOSE_SOCK, globals.ks_pool, NULL, 30000) != KS_STATUS_SUCCESS) {
+	if (kws_connect_ex(&context->ws, req, KWS_BLOCK | KWS_CLOSE_SOCK, whisper_globals.ks_pool, NULL, 30000) != KS_STATUS_SUCCESS) {
 		ks_json_delete(&req);
-		switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_ERROR, "Websocket connect to %s failed\n", globals.asr_server_url);
+		switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_ERROR, "Websocket connect to %s failed\n", whisper_globals.asr_server_url);
 		return SWITCH_STATUS_GENERR;
 	}
 
@@ -473,8 +481,6 @@ static void whisper_text_param(switch_asr_handle_t *ah, char *param, const char 
 static switch_status_t whisper_speech_open(switch_speech_handle_t *sh, const char *voice_name, int rate, int channels, switch_speech_flag_t *flags)
 {
 	whisper_tts_t *context = switch_core_alloc(sh->memory_pool, sizeof(whisper_tts_t));
-	ks_json_t *req = ks_json_create_object();
-	ks_json_add_string_to_object(req, "url", (globals.tts_server_url));
 
 	switch_assert(context);
 
@@ -492,14 +498,7 @@ static switch_status_t whisper_speech_open(switch_speech_handle_t *sh, const cha
 
 	sh->private_info = context;
 
-
-	if (kws_connect_ex(&context->ws, req, KWS_BLOCK | KWS_CLOSE_SOCK, globals.ks_pool, NULL, 30000) != KS_STATUS_SUCCESS) {
-		ks_json_delete(&req);
-		switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_ERROR, "Websocket connect to %s failed\n", globals.tts_server_url);
-		return SWITCH_STATUS_GENERR;
-	}
-	ks_json_delete(&req);
-
+	ws_tts_setup_connection(whisper_globals.tts_server_url, context, whisper_globals.pool);
 
 	return SWITCH_STATUS_SUCCESS;
 }
@@ -508,16 +507,11 @@ static switch_status_t whisper_speech_close(switch_speech_handle_t *sh, switch_s
 {
 	whisper_tts_t *context = (whisper_tts_t *) sh->private_info;
 
+	ws_tts_close_connection(context);
+
 	if ( context->audio_buffer ) {
 		switch_buffer_destroy(&context->audio_buffer);
 	}
-
-
-	/** FIXME: websockets server still expects us to read the close confirmation and only then close
-	    libks library doens't implement it yet. */
-	kws_close(context->ws, KWS_CLOSE_SOCK);
-	kws_destroy(&context->ws);
-
 
 	return SWITCH_STATUS_SUCCESS;
 }
@@ -525,30 +519,29 @@ static switch_status_t whisper_speech_close(switch_speech_handle_t *sh, switch_s
 static switch_status_t whisper_speech_feed_tts(switch_speech_handle_t *sh, char *text, switch_speech_flag_t *flags)
 {
 	whisper_tts_t *context = (whisper_tts_t *)sh->private_info;
-	switch_status_t ws_status;
+
+	unsigned char buffer[LWS_SEND_BUFFER_PRE_PADDING + strlen(text) + LWS_SEND_BUFFER_POST_PADDING];
+	unsigned char *p = &buffer[LWS_SEND_BUFFER_PRE_PADDING];
 
 	if (switch_true(switch_core_get_variable("mod_whisper_tts_must_have_channel_uuid")) && zstr(context->channel_uuid)) {
 		return SWITCH_STATUS_FALSE;
 	}
 
 	if (!zstr(text)) {
-//		char *p = strstr(text, "silence://");
-//
-//		if (p) {
-//			p += strlen("silence://");
-//			context->samplerate = atoi(p) * sh->samplerate / 1000;
-//		}
-
 		context->text = switch_core_strdup(sh->memory_pool, text);
 	}
 
+	memcpy(p, context->text, strlen(context->text));
 
-	ws_status = whisper_get_speech_synthesis(context);
+	if (lws_write(context->wsi, p, strlen(context->text), LWS_WRITE_TEXT) < 0) {
+		fprintf(stderr, "Error writing to socket\n");
+		switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_CRIT, "Unable to write message\n");
+		return -1;
+	}		
 
-	if (ws_status != SWITCH_STATUS_SUCCESS) {
-		return SWITCH_STATUS_BREAK;
+	while ( (!context->audio_buffer || switch_buffer_inuse(context->audio_buffer) == 0) && context->started == WS_STATE_STARTED ) {
+		usleep(30000);
 	}
-
 	return SWITCH_STATUS_SUCCESS;
 }
 
@@ -556,12 +549,11 @@ static switch_status_t whisper_speech_read_tts(switch_speech_handle_t *sh, void 
 {
 	whisper_tts_t *context = (whisper_tts_t *)sh->private_info;
 	size_t bytes_read;
-
+	
 	if ( (bytes_read = switch_buffer_read(context->audio_buffer, data, *datalen)) ) {
 		*datalen = bytes_read ;
 		return SWITCH_STATUS_SUCCESS;
 	}
-
 	return SWITCH_STATUS_FALSE;
 }
 
@@ -611,23 +603,23 @@ static switch_status_t load_config(void)
 			char *var = (char *) switch_xml_attr_soft(param, "name");
 			char *val = (char *) switch_xml_attr_soft(param, "value");
 			if (!strcasecmp(var, "asr-server-url")) {
-				globals.asr_server_url = switch_core_strdup(globals.pool, val);
+				whisper_globals.asr_server_url = switch_core_strdup(whisper_globals.pool, val);
 			}
 			if (!strcasecmp(var, "tts-server-url")) {
-				globals.tts_server_url = switch_core_strdup(globals.pool, val);
+				whisper_globals.tts_server_url = switch_core_strdup(whisper_globals.pool, val);
 			}
 			if (!strcasecmp(var, "return-json")) {
-				globals.return_json = atoi(val);
+				whisper_globals.return_json = atoi(val);
 			}
 		}
 	}
 
   done:
-	if (!globals.asr_server_url) {
-		globals.asr_server_url = switch_core_strdup(globals.pool, "ws://127.0.0.1:2700");
+	if (!whisper_globals.asr_server_url) {
+		whisper_globals.asr_server_url = switch_core_strdup(whisper_globals.pool, "ws://127.0.0.1:2700");
 	}
-	if (!globals.tts_server_url) {
-		globals.tts_server_url = switch_core_strdup(globals.pool, "ws://127.0.0.1:2600");
+	if (!whisper_globals.tts_server_url) {
+		whisper_globals.tts_server_url = switch_core_strdup(whisper_globals.pool, "ws://127.0.0.1:2600");
 	}
 	if (xml) {
 		switch_xml_free(xml);
@@ -645,7 +637,7 @@ static void do_load(void)
 
 static void event_handler(switch_event_t *event)
 {
-	if (globals.auto_reload) {
+	if (whisper_globals.auto_reload) {
 		do_load();
 		switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_INFO, "Whisper Reloaded\n");
 	}
@@ -658,11 +650,11 @@ SWITCH_MODULE_LOAD_FUNCTION(mod_whisper_load)
 
 	switch_mutex_init(&MUTEX, SWITCH_MUTEX_NESTED, pool);
 
-	globals.pool = pool;
+	whisper_globals.pool = pool;
 
 	ks_init();
 
-	ks_pool_open(&globals.ks_pool);
+	ks_pool_open(&whisper_globals.ks_pool);
 	ks_global_set_default_logger(7);
 
 	if ((switch_event_bind_removable(modname, SWITCH_EVENT_RELOADXML, NULL, event_handler, NULL, &NODE) != SWITCH_STATUS_SUCCESS)) {
@@ -705,7 +697,7 @@ SWITCH_MODULE_LOAD_FUNCTION(mod_whisper_load)
 
 SWITCH_MODULE_SHUTDOWN_FUNCTION(mod_whisper_shutdown)
 {
-	ks_pool_close(&globals.ks_pool);
+	ks_pool_close(&whisper_globals.ks_pool);
 	ks_shutdown();
 
 	switch_event_unbind(&NODE);
