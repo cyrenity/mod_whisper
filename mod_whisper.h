@@ -68,7 +68,20 @@ typedef struct {
 
 // static int wsbridge_callback_ws(struct lws *wsi, enum lws_callback_reasons reason,
 // 								void *user, void *in, size_t len);
- 
+int callback_ws(struct lws *wsi, enum lws_callback_reasons reason,
+								void *user, void *in, size_t len);
+
+
+#define RX_BUFFER_SIZE 64 * 1024 * 16 /* warning: RX_BUFFER_SIZE is also TX_BUFFER_SIZE ! it has to be big, otherwise -> latency problems on send()*/
+
+struct whisper_globals {
+	char *asr_server_url;
+	char *tts_server_url;
+	int return_json;
+	int auto_reload;
+	switch_memory_pool_t *pool;
+	ks_pool_t *ks_pool;
+};
 
  
 #define WS_STATE_STARTED 0
