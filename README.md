@@ -8,6 +8,13 @@ A FreeSWITCH module to interface to your speech recognition & TTS server over we
 
 2. Add `src/mod/asr_tts/mod_whisper/Makefile` in `configure.ac` under `AC_CONFIG_FILES` section
 
+2.1. Add following snippet in `configure.ac` 
+
+```
+PKG_CHECK_MODULES([WEBSOCKETS], [libwebsockets >= 0.0.1],[
+  AM_CONDITIONAL([HAVE_WEBSOCKETS],[true])],[
+  AC_MSG_RESULT([no]); AM_CONDITIONAL([HAVE_WEBSOCKETS],[false])])
+```
 3. Add the following two module in the ${FREESWITCH_SOURCE_ROOT}/modules.conf
 ```
 asr_tts/mod_whisper
