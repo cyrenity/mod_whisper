@@ -44,7 +44,7 @@ SWITCH_MODULE_SHUTDOWN_FUNCTION(mod_whisper_shutdown);
 SWITCH_MODULE_RUNTIME_FUNCTION(mod_whisper_runtime);
 SWITCH_MODULE_DEFINITION(mod_whisper, mod_whisper_load, mod_whisper_shutdown, mod_whisper_runtime);
 
-static void whisper_reset(whisper_t *context)
+static void whisper_reset_vad(whisper_t *context)
 {
 	if (context->vad) {
 		switch_vad_reset(context->vad);
@@ -120,7 +120,7 @@ static switch_status_t whisper_open(switch_asr_handle_t *ah, const char *codec, 
 
 	switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "ASR opened\n");
 
-	whisper_reset(context);
+	whisper_reset_vad(context);
 
 	return SWITCH_STATUS_SUCCESS;
 }
@@ -207,7 +207,7 @@ static switch_status_t whisper_feed(switch_asr_handle_t *ah, void *data, unsigne
 
 	if (switch_test_flag(context, ASRFLAG_RETURNED_RESULT) && switch_test_flag(ah, SWITCH_ASR_FLAG_AUTO_RESUME)) {
 		switch_log_printf(SWITCH_CHANNEL_UUID_LOG(context->channel_uuid), SWITCH_LOG_DEBUG, "Auto Resuming\n");
-		whisper_reset(context);
+		whisper_reset_vad(context);
 	}
 
 	if (switch_test_flag(context, ASRFLAG_TIMEOUT)) {
@@ -229,7 +229,7 @@ static switch_status_t whisper_feed(switch_asr_handle_t *ah, void *data, unsigne
 
 	if (switch_test_flag(context, ASRFLAG_READY)) {
 
-		vad_state = switch_vad_process(context->vad, (int16_t *)data, len / sizeof(uint16_t));
+		vad_state = switch_vad_process(context->vad, (int16_t *) data, len / sizeof(uint16_t));
 
 
 		if (vad_state == SWITCH_VAD_STATE_TALKING) {
@@ -323,7 +323,7 @@ static switch_status_t whisper_resume(switch_asr_handle_t *ah)
 	}
 
 	switch_log_printf(SWITCH_CHANNEL_UUID_LOG(context->channel_uuid), SWITCH_LOG_DEBUG, "Resuming\n");
-	whisper_reset(context);
+	whisper_reset_vad(context);
 	
 	return SWITCH_STATUS_SUCCESS;
 }
@@ -481,6 +481,7 @@ static void whisper_text_param(switch_asr_handle_t *ah, char *param, const char 
 static switch_status_t whisper_speech_open(switch_speech_handle_t *sh, const char *voice_name, int rate, int channels, switch_speech_flag_t *flags)
 {
 	whisper_tts_t *context = switch_core_alloc(sh->memory_pool, sizeof(whisper_tts_t));
+	switch_status_t status = SWITCH_STATUS_FALSE;
 
 	switch_assert(context);
 
@@ -498,9 +499,9 @@ static switch_status_t whisper_speech_open(switch_speech_handle_t *sh, const cha
 
 	sh->private_info = context;
 
-	ws_tts_setup_connection(whisper_globals.tts_server_url, context, whisper_globals.pool);
+	status = ws_tts_setup_connection(whisper_globals.tts_server_url, context, whisper_globals.pool);
 
-	return SWITCH_STATUS_SUCCESS;
+	return status;
 }
 
 static switch_status_t whisper_speech_close(switch_speech_handle_t *sh, switch_speech_flag_t *flags)
@@ -655,7 +656,6 @@ SWITCH_MODULE_LOAD_FUNCTION(mod_whisper_load)
 	ks_init();
 
 	ks_pool_open(&whisper_globals.ks_pool);
-	ks_global_set_default_logger(7);
 
 	if ((switch_event_bind_removable(modname, SWITCH_EVENT_RELOADXML, NULL, event_handler, NULL, &NODE) != SWITCH_STATUS_SUCCESS)) {
 		switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_ERROR, "Couldn't bind!\n");
