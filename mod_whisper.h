@@ -56,7 +56,8 @@ typedef struct {
 	switch_mutex_t *wsi_mutex;
 	int started;
 	switch_bool_t wc_connected;
-	struct lws *wsi_wsbridge;
+	switch_bool_t wc_error;
+	struct lws *wsi;
 	struct lws_context *lws_context;
 	struct lws_context_creation_info lws_info;
 	struct lws_client_connect_info lws_ccinfo;
@@ -70,7 +71,7 @@ typedef struct {
  
 
  
-#define WSBRIDGE_STATE_STARTED 0
-#define WSBRIDGE_STATE_DESTROY 1
+#define WS_STATE_STARTED 0
+#define WS_STATE_DESTROY 1
 #define WS_TIMEOUT_MS 50  /* same as ptime on the RTP side , lws_service()*/
 #endif
