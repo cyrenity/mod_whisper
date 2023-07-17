@@ -33,23 +33,8 @@
 
 #include "mod_whisper.h"
 #include "websock_glue.h"
-#include <libwebsockets.h>
 
-struct {
-	char *asr_server_url;
-	char *tts_server_url;
-	int return_json;
-	int auto_reload;
-	switch_memory_pool_t *pool;
-	ks_pool_t *ks_pool;
-} whisper_globals;
-
-
-#define RX_BUFFER_SIZE 64 * 1024 * 16 /* warning: RX_BUFFER_SIZE is also TX_BUFFER_SIZE ! it has to be big, otherwise -> latency problems on send()*/
-
-
-static int callback_ws(struct lws *wsi, enum lws_callback_reasons reason,
-								void *user, void *in, size_t len);
+struct whisper_globals whisper_globals;
 
 switch_mutex_t *MUTEX = NULL;
 switch_event_node_t *NODE = NULL;
@@ -73,81 +58,6 @@ static void whisper_reset(whisper_t *context)
 		switch_set_flag(context, ASRFLAG_INPUT_TIMERS);
 	}
 }
-
-// libwebsocket protocols
-static struct lws_protocols WSBRIDGE_protocols[] = {
-	{
-		"WSBRIDGE",
-		callback_ws,
-		0,
-	/* rx_buffer_size Docs:
-	 *
-	 * If you want atomic frames delivered to the callback, you should set this to the size of the biggest legal frame that you support. 
-	 * If the frame size is exceeded, there is no error, but the buffer will spill to the user callback when full, which you can detect by using lws_remaining_packet_payload. 
-	 *
-	 * * */
-		RX_BUFFER_SIZE,		
-	},
-	{ NULL, NULL, 0, 0 } /* end */
-};
-
-static int callback_ws(struct lws *wsi, enum lws_callback_reasons reason, void *user, void *in, size_t len)
-{
-	whisper_tts_t *context = (whisper_tts_t *)lws_wsi_user(wsi);
-
-    switch (reason) {
-        case LWS_CALLBACK_CLIENT_ESTABLISHED:
-			switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "WebSockets client established. [%p]\n", (void *)wsi);
-			context->wc_connected = TRUE;
-            break;
-        case LWS_CALLBACK_CLIENT_RECEIVE:
-			switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "WS receiving data\n");
-
-			if (lws_frame_is_binary(context->wsi)) {
-				switch_buffer_write(context->audio_buffer, in, len);				
-			} else {
-				switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_WARNING, "WebSockets RX: Frame not received in binary mode");
-			}
-
-			if (lws_is_final_fragment(context->wsi)) {
-				switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_WARNING, "Got Final fragment\n");
-				lws_close_reason(wsi, LWS_CLOSE_STATUS_NORMAL, (unsigned char *)"seeya", 5);
-				return -1;
-			}
-            break;
-        case LWS_CALLBACK_CLIENT_CONNECTION_ERROR:
-			switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "Websocket connection error. %p \n", (void *)wsi);
-			context->wc_error = TRUE;
-			return -1;
-		    break;
-        default:
-            break;
-    }
-    return 0;
-}
-
-static void *SWITCH_THREAD_FUNC ws_thread_run(switch_thread_t *thread, void *obj) {
-	//int n;
-	whisper_tts_t *context = (whisper_tts_t *) obj;
-	do {
-		lws_service(context->lws_context, WS_TIMEOUT_MS);
-		//switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "Websocket. %p %d\n", (void *)context->wsi, n);
-	} while (context->started == WS_STATE_STARTED);
-    return NULL;
-}
-
-static void ws_thread_launch(whisper_tts_t *tech_pvt)
-{
-	switch_thread_t *thread;
-	switch_threadattr_t *thd_attr = NULL;
-
-	switch_threadattr_create(&thd_attr, whisper_globals.pool);
-	switch_threadattr_detach_set(thd_attr, 1);
-	switch_threadattr_stacksize_set(thd_attr, SWITCH_THREAD_STACKSIZE);
-	tech_pvt->started = WS_STATE_STARTED;
-	switch_thread_create(&thread, thd_attr, ws_thread_run, tech_pvt, whisper_globals.pool);
-}
-
 
 static switch_status_t whisper_open(switch_asr_handle_t *ah, const char *codec, int rate, const char *dest, switch_asr_flag_t *flags)
 {
@@ -571,9 +481,6 @@ static void whisper_text_param(switch_asr_handle_t *ah, char *param, const char 
 static switch_status_t whisper_speech_open(switch_speech_handle_t *sh, const char *voice_name, int rate, int channels, switch_speech_flag_t *flags)
 {
 	whisper_tts_t *context = switch_core_alloc(sh->memory_pool, sizeof(whisper_tts_t));
-	const char *prot;
-	char *tts_server_uri;
-	int logs = LLL_USER | LLL_ERR | LLL_WARN;
 
 	switch_assert(context);
 
@@ -591,62 +498,8 @@ static switch_status_t whisper_speech_open(switch_speech_handle_t *sh, const cha
 
 	sh->private_info = context;
 
-	context->lws_info.port = CONTEXT_PORT_NO_LISTEN;
-	context->lws_info.protocols = WSBRIDGE_protocols;
-	context->lws_info.gid = -1;
-	context->lws_info.uid = -1;
+	ws_tts_setup_connection(whisper_globals.tts_server_url, context, whisper_globals.pool);
 
-	lws_set_log_level(logs, NULL);
-	
-	context->lws_context = lws_create_context(&context->lws_info);
-
-	if (context->lws_context == NULL) {
-			switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_CRIT, "Creating libwebsocket context failed\n");
-			return SWITCH_CAUSE_DESTINATION_OUT_OF_ORDER;
-	}
-
-	/* Set the actual thing up here */
-	tts_server_uri = switch_core_strdup(sh->memory_pool, whisper_globals.tts_server_url);
-
-	if (lws_parse_uri(tts_server_uri, 
-		&prot, 
-		&context->lws_ccinfo.address, 
-		&context->lws_ccinfo.port, 
-		&context->lws_ccinfo.path)) {
-		/* XXX Error */
-		return SWITCH_CAUSE_INVALID_URL;
-	}
-
-	if (!strcmp(prot, "ws")) {
-		context->lws_ccinfo.ssl_connection = 0;
-	} else {
-		context->lws_ccinfo.ssl_connection = 2;
-	}
-	
-    context->lws_ccinfo.context = context->lws_context;
-    context->lws_ccinfo.host = lws_canonical_hostname(context->lws_context);
-    context->lws_ccinfo.origin = "origin";
-	context->lws_ccinfo.userdata = (whisper_tts_t *) context;
-    context->lws_ccinfo.protocol = WSBRIDGE_protocols[0].name;
-
-    context->wsi = lws_client_connect_via_info(&context->lws_ccinfo);
-
-    if (context->wsi == NULL) {
-			switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_CRIT, "Websocket setup failed\n");
-			return SWITCH_CAUSE_DESTINATION_OUT_OF_ORDER;
-	}
-
-	ws_thread_launch(context);
-
-	while (!(context->wc_connected || context->wc_error)) {
-		usleep(30000);
-	}
-
-	if (context->wc_error == TRUE) {
-			switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_CRIT, "Websocket connect failed\n");
-			return SWITCH_STATUS_FALSE;
-	}
-	
 	return SWITCH_STATUS_SUCCESS;
 }
 
@@ -654,9 +507,7 @@ static switch_status_t whisper_speech_close(switch_speech_handle_t *sh, switch_s
 {
 	whisper_tts_t *context = (whisper_tts_t *) sh->private_info;
 
-	lws_cancel_service(context->lws_context);
-	context->started = WS_STATE_DESTROY;
-	lws_context_destroy(context->lws_context);
+	ws_tts_close_connection(context);
 
 	if ( context->audio_buffer ) {
 		switch_buffer_destroy(&context->audio_buffer);
