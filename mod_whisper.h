@@ -40,6 +40,17 @@ typedef struct {
 	switch_mutex_t *mutex;
 	kws_t *ws;
 	int partial;
+	switch_memory_pool_t *pool;
+
+	/* thread related members */
+	switch_mutex_t *wsi_mutex;
+	int started;
+	switch_bool_t wc_connected;
+	switch_bool_t wc_error;
+	struct lws *wsi;
+	struct lws_context *lws_context;
+	struct lws_context_creation_info lws_info;
+	struct lws_client_connect_info lws_ccinfo;
 } whisper_t;
 
 
@@ -68,7 +79,9 @@ typedef struct {
 
 // static int wsbridge_callback_ws(struct lws *wsi, enum lws_callback_reasons reason,
 // 								void *user, void *in, size_t len);
-int callback_ws(struct lws *wsi, enum lws_callback_reasons reason,
+int callback_ws_tts(struct lws *wsi, enum lws_callback_reasons reason,
+								void *user, void *in, size_t len);
+int callback_ws_asr(struct lws *wsi, enum lws_callback_reasons reason,
 								void *user, void *in, size_t len);
 
 
