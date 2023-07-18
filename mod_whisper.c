@@ -50,7 +50,7 @@ static void whisper_reset_vad(whisper_t *context)
 		switch_vad_reset(context->vad);
 	}
 	context->flags = 0;
-	context->result_text = "agent";
+	context->result_text = "";
 	context->result_confidence = 87.3;
 	switch_set_flag(context, ASRFLAG_READY);
 	context->no_input_time = switch_micro_time_now();
@@ -62,15 +62,9 @@ static void whisper_reset_vad(whisper_t *context)
 static switch_status_t whisper_open(switch_asr_handle_t *ah, const char *codec, int rate, const char *dest, switch_asr_flag_t *flags)
 {
 	whisper_t *context;
-	char *session_uuid = NULL;
-	switch_core_session_t *session = switch_core_memory_pool_get_data(ah->memory_pool, "__session");
-	ks_json_t *req = ks_json_create_object();
-	ks_json_add_string_to_object(req, "url", (dest ? dest : whisper_globals.asr_server_url));
+	char *asr_server = NULL;
+	switch_status_t status = SWITCH_STATUS_SUCCESS;
 
-	if (session) {
-		session_uuid = switch_core_session_get_uuid(session);
-		switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "Get session data in whisper_open %s\n", session_uuid);
-	}
 
 	if (switch_test_flag(ah, SWITCH_ASR_FLAG_CLOSED)) {
 		switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "asr_open attempt on CLOSED asr handle\n");
@@ -81,28 +75,31 @@ static switch_status_t whisper_open(switch_asr_handle_t *ah, const char *codec, 
 		return SWITCH_STATUS_MEMERR;
 	}
 
+	context->pool = ah->memory_pool;
+
 	ah->private_info = context;
 	codec = "L16";
 	ah->codec = switch_core_strdup(ah->memory_pool, codec);
+
+	asr_server = switch_core_strdup(whisper_globals.pool, whisper_globals.asr_server_url);
 
 	if (rate > 16000) {
 		ah->native_rate = 16000;
 	}
 
-	switch_mutex_init(&context->mutex, SWITCH_MUTEX_NESTED, ah->memory_pool);
+	switch_mutex_init(&context->mutex, SWITCH_MUTEX_NESTED, whisper_globals.pool);
 
 	if (switch_buffer_create_dynamic(&context->audio_buffer, AUDIO_BLOCK_SIZE, AUDIO_BLOCK_SIZE, 0) != SWITCH_STATUS_SUCCESS) {
 		switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_ERROR, "Failed to create the audio buffer\n");
 		return SWITCH_STATUS_MEMERR;
 	}
 
-	if (kws_connect_ex(&context->ws, req, KWS_BLOCK | KWS_CLOSE_SOCK, whisper_globals.ks_pool, NULL, 30000) != KS_STATUS_SUCCESS) {
-		ks_json_delete(&req);
-		switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_ERROR, "Websocket connect to %s failed\n", whisper_globals.asr_server_url);
-		return SWITCH_STATUS_GENERR;
-	}
+	status = ws_asr_setup_connection(asr_server, context, whisper_globals.pool);
 
-	ks_json_delete(&req);
+	if (status != SWITCH_STATUS_SUCCESS) {
+		ws_asr_close_connection(context);
+		return status;
+	}
 
 	context->thresh = 400;
 	context->silence_ms = 700;
@@ -122,7 +119,7 @@ static switch_status_t whisper_open(switch_asr_handle_t *ah, const char *codec, 
 
 	whisper_reset_vad(context);
 
-	return SWITCH_STATUS_SUCCESS;
+	return status;
 }
 
 static switch_status_t whisper_load_grammar(switch_asr_handle_t *ah, const char *grammar, const char *name)
@@ -146,7 +143,7 @@ static switch_status_t whisper_load_grammar(switch_asr_handle_t *ah, const char 
 	strcpy(req_string, ks_json_print_unformatted(req));
 
 
-	if (ws_send_text(context->ws, req_string) != SWITCH_STATUS_SUCCESS) {
+	if (ws_send_text(context->wsi, req_string) != SWITCH_STATUS_SUCCESS) {
 		switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_ERROR, "Unable to send grammar to websocket server\n");
 	}
 	
@@ -163,12 +160,9 @@ static switch_status_t whisper_close(switch_asr_handle_t *ah, switch_asr_flag_t 
 	whisper_t *context = (whisper_t *)ah->private_info;
 	switch_status_t status = SWITCH_STATUS_SUCCESS;
 
-	switch_mutex_lock(context->mutex);
+	ws_asr_close_connection(context);
 
-	/** FIXME: websockets server still expects us to read the close confirmation and only then close
-	    libks library doens't implement it yet. */
-	kws_close(context->ws, KWS_CLOSE_SOCK);
-	kws_destroy(&context->ws);
+	switch_mutex_lock(context->mutex);
 
 	switch_set_flag(ah, SWITCH_ASR_FLAG_CLOSED);
 	switch_buffer_destroy(&context->audio_buffer);
@@ -193,12 +187,8 @@ static switch_status_t whisper_close(switch_asr_handle_t *ah, switch_asr_flag_t 
 static switch_status_t whisper_feed(switch_asr_handle_t *ah, void *data, unsigned int len, switch_asr_flag_t *flags)
 {
 	whisper_t *context = (whisper_t *) ah->private_info;
-	switch_status_t status = SWITCH_STATUS_SUCCESS;
 	switch_vad_state_t vad_state;
 
-	int poll_result;
-	kws_opcode_t oc;
-	uint8_t *rdata;
 	int rlen;
 	
 	if (switch_test_flag(ah, SWITCH_ASR_FLAG_CLOSED)) {
@@ -218,7 +208,6 @@ static switch_status_t whisper_feed(switch_asr_handle_t *ah, void *data, unsigne
 		if (ws_status != SWITCH_STATUS_SUCCESS) {
 			return SWITCH_STATUS_BREAK;
 		}
-			
 
 		//set vad flags to stop detection
 		switch_set_flag(context, ASRFLAG_RESULT);
@@ -229,8 +218,7 @@ static switch_status_t whisper_feed(switch_asr_handle_t *ah, void *data, unsigne
 
 	if (switch_test_flag(context, ASRFLAG_READY)) {
 
-		vad_state = switch_vad_process(context->vad, (int16_t *) data, len / sizeof(uint16_t));
-
+		vad_state = switch_vad_process(context->vad, (int16_t *)data, len / sizeof(uint16_t));
 
 		if (vad_state == SWITCH_VAD_STATE_TALKING) {
 
@@ -238,41 +226,17 @@ static switch_status_t whisper_feed(switch_asr_handle_t *ah, void *data, unsigne
 			switch_mutex_lock(context->mutex);
 			switch_buffer_write(context->audio_buffer, data, len);
 
-
 			if (switch_buffer_inuse(context->audio_buffer) > AUDIO_BLOCK_SIZE) {
 				rlen = switch_buffer_read(context->audio_buffer, buf, AUDIO_BLOCK_SIZE);
 				switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "Sending data %d\n", rlen);
 
-				if (kws_write_frame(context->ws, WSOC_BINARY, buf, rlen) < 0) {
+				if (ws_send_binary(context->wsi, buf, rlen) != SWITCH_STATUS_SUCCESS) {
 					switch_mutex_unlock(context->mutex);
 					return SWITCH_STATUS_BREAK;
 				}
 			} 
 
-			poll_result = kws_wait_sock(context->ws, 5, KS_POLL_READ | KS_POLL_ERROR);
-
-			if (poll_result != KS_POLL_READ) {
-				switch_mutex_unlock(context->mutex);
-				return SWITCH_STATUS_SUCCESS;
-			}
-
-			rlen = kws_read_frame(context->ws, &oc, &rdata);
-			if (rlen < 0) {
-				switch_mutex_unlock(context->mutex);
-				return SWITCH_STATUS_BREAK;
-			}
-
-			if (oc == WSOC_PING) {
-				switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "Received ping\n");
-				kws_write_frame(context->ws, WSOC_PONG, rdata, rlen);
-				switch_mutex_unlock(context->mutex);
-				return SWITCH_STATUS_SUCCESS;
-			}
-
-			switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "Recieved %d bytes:%s\n", rlen, rdata);
-			context->result_text = switch_safe_strdup((const char *)rdata);
-			//switch_mutex_unlock(context->mutex);
-
+			switch_mutex_unlock(context->mutex);
 		}
 
 		if (vad_state == SWITCH_VAD_STATE_STOP_TALKING) {
@@ -280,6 +244,7 @@ static switch_status_t whisper_feed(switch_asr_handle_t *ah, void *data, unsigne
 			ws_status = whisper_get_final_transcription(context);
 			
 			if (ws_status != SWITCH_STATUS_SUCCESS) {
+				switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "Stuck here \n");
 				return SWITCH_STATUS_BREAK;
 			}
 				
@@ -295,7 +260,19 @@ static switch_status_t whisper_feed(switch_asr_handle_t *ah, void *data, unsigne
 		}
 	}
 
-	return status;
+	if (switch_test_flag(context, ASRFLAG_RESULT)) {
+		while (strlen(context->result_text) < 1 && context->started == WS_STATE_STARTED) {
+			switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "Gonna sleep for sometime \n");
+			switch_sleep(100000);
+		}
+
+		if (strlen(context->result_text) < 1) {
+			switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_CRIT, "No text recieved \n");
+			return SWITCH_STATUS_FALSE;
+		}
+	}
+	
+	return SWITCH_STATUS_SUCCESS;
 }
 
 static switch_status_t whisper_pause(switch_asr_handle_t *ah)
@@ -482,7 +459,6 @@ static switch_status_t whisper_speech_open(switch_speech_handle_t *sh, const cha
 {
 	whisper_tts_t *context = switch_core_alloc(sh->memory_pool, sizeof(whisper_tts_t));
 	switch_status_t status = SWITCH_STATUS_FALSE;
-
 	switch_assert(context);
 
     if ( voice_name ) {
@@ -653,9 +629,9 @@ SWITCH_MODULE_LOAD_FUNCTION(mod_whisper_load)
 
 	whisper_globals.pool = pool;
 
-	ks_init();
+	// ks_init();
 
-	ks_pool_open(&whisper_globals.ks_pool);
+	// ks_pool_open(&whisper_globals.ks_pool);
 
 	if ((switch_event_bind_removable(modname, SWITCH_EVENT_RELOADXML, NULL, event_handler, NULL, &NODE) != SWITCH_STATUS_SUCCESS)) {
 		switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_ERROR, "Couldn't bind!\n");
@@ -697,8 +673,8 @@ SWITCH_MODULE_LOAD_FUNCTION(mod_whisper_load)
 
 SWITCH_MODULE_SHUTDOWN_FUNCTION(mod_whisper_shutdown)
 {
-	ks_pool_close(&whisper_globals.ks_pool);
-	ks_shutdown();
+	// ks_pool_close(&whisper_globals.ks_pool);
+	// ks_shutdown();
 
 	switch_event_unbind(&NODE);
 	return SWITCH_STATUS_SUCCESS;
