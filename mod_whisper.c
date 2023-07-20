@@ -164,7 +164,7 @@ static switch_status_t whisper_close(switch_asr_handle_t *ah, switch_asr_flag_t 
 
 	switch_mutex_lock(context->mutex);
 
-	switch_set_flag(ah, SWITCH_ASR_FLAG_CLOSED);
+	//switch_set_flag(ah, SWITCH_ASR_FLAG_CLOSED);
 	switch_buffer_destroy(&context->audio_buffer);
 	switch_mutex_unlock(context->mutex);
 
@@ -249,8 +249,8 @@ static switch_status_t whisper_feed(switch_asr_handle_t *ah, void *data, unsigne
 				return SWITCH_STATUS_BREAK;
 			}
 				
-			//set vad flags to stop detection
-			switch_set_flag(context, ASRFLAG_RESULT);
+			// set vad flags to stop detection
+			switch_set_flag(context, ASRFLAG_RESULT_PENDING);
 			switch_vad_reset(context->vad);
 			switch_clear_flag(context, ASRFLAG_READY);
 
@@ -273,15 +273,10 @@ static switch_status_t whisper_feed(switch_asr_handle_t *ah, void *data, unsigne
 		}
 	}
 
-	if (switch_test_flag(context, ASRFLAG_RESULT)) {
-		while (strlen(context->result_text) < 1 && context->started == WS_STATE_STARTED) {
-			//switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "Going to sleep for sometime \n");
+	if (switch_test_flag(context, ASRFLAG_RESULT_PENDING)) {
+		while (!switch_test_flag(context, ASRFLAG_RESULT)) {
+			//switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "Going to sleep for sometime %s \n", context->result_text);
 			switch_sleep(100000);
-		}
-
-		if (strlen(context->result_text) < 1) {
-			switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_CRIT, "No text recieved %s \n", context->result_text);
-			return SWITCH_STATUS_FALSE;
 		}
 	}
 	

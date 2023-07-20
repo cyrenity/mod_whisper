@@ -16,9 +16,10 @@ typedef enum {
 	ASRFLAG_START_OF_SPEECH = (1 << 2),
 	ASRFLAG_RETURNED_START_OF_SPEECH = (1 << 3),
 	ASRFLAG_NOINPUT_TIMEOUT = (1 << 4),
-	ASRFLAG_RESULT = (1 << 5),
-	ASRFLAG_RETURNED_RESULT = (1 << 6),
-	ASRFLAG_TIMEOUT = (1 << 7)
+	ASRFLAG_RESULT_PENDING = (1 << 5),
+	ASRFLAG_RESULT = (1 << 6),
+	ASRFLAG_RETURNED_RESULT = (1 << 7),
+	ASRFLAG_TIMEOUT = (1 << 8)
 } whisper_flag_t;
 
 typedef struct {
