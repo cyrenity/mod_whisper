@@ -178,7 +178,7 @@ int callback_ws_asr(struct lws *wsi, enum lws_callback_reasons reason, void *use
 				switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_WARNING, "Text: %s \n", (char *)in);
 				context->result_text = switch_safe_strdup((const char *)in); 
 			}
-			switch_set_flag(context, ASRFLAG_RESULT);
+			switch_set_flag(context, ASRFLAG_RESULT_READY);
 			switch_clear_flag(context, ASRFLAG_RESULT_PENDING);
 
             break;
@@ -191,7 +191,6 @@ int callback_ws_asr(struct lws *wsi, enum lws_callback_reasons reason, void *use
 		case LWS_CALLBACK_CLIENT_CLOSED:
 			switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_WARNING, "Websocket ASR client connection closed.\n");
 			context->started = WS_STATE_DESTROY;
-			
 			return -1;
 		    break;    
         default:
