@@ -41,11 +41,11 @@ int callback_ws_tts(struct lws *wsi, enum lws_callback_reasons reason, void *use
 
     switch (reason) {
         case LWS_CALLBACK_CLIENT_ESTABLISHED:
-			switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "WebSockets client established. [%p]\n", (void *)wsi);
+			switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "WebSockets TTS client established. [%p]\n", (void *)wsi);
 			context->wc_connected = TRUE;
             break;
         case LWS_CALLBACK_CLIENT_RECEIVE:
-			switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "WS receiving data\n");
+			switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "WS receiving TTS data\n");
 
 			if (lws_frame_is_binary(context->wsi)) {
 				switch_buffer_write(context->audio_buffer, in, len);				
@@ -59,12 +59,12 @@ int callback_ws_tts(struct lws *wsi, enum lws_callback_reasons reason, void *use
 			}
             break;
         case LWS_CALLBACK_CLIENT_CONNECTION_ERROR:
-			switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_ERROR, "Websocket connection error\n");
+			switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_ERROR, "Websocket TTS connection error\n");
 			context->wc_error = TRUE;
 			return -1;
 		    break;        
 		case LWS_CALLBACK_CLIENT_CLOSED:
-			switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_WARNING, "Websocket client connection closed.\n");
+			switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_WARNING, "Websocket TTS client connection closed.\n");
 			context->started = WS_STATE_DESTROY;
 			return -1;
 		    break;    
@@ -169,29 +169,29 @@ int callback_ws_asr(struct lws *wsi, enum lws_callback_reasons reason, void *use
 
     switch (reason) {
         case LWS_CALLBACK_CLIENT_ESTABLISHED:
-			switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "WebSockets client established. [%p]\n", (void *)wsi);
+			switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "WebSockets ASR client established. [%p]\n", (void *)wsi);
 			context->wc_connected = TRUE;
             break;
         case LWS_CALLBACK_CLIENT_RECEIVE:
-			switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "WS receiving data\n");
+			switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "WS receiving ASR data\n");
 			if (!lws_frame_is_binary(context->wsi)) {
 				switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_WARNING, "Text: %s \n", (char *)in);
 				context->result_text = switch_safe_strdup((const char *)in); 
 			}
+			switch_set_flag(context, ASRFLAG_RESULT);
+			switch_clear_flag(context, ASRFLAG_RESULT_PENDING);
 
-			if (lws_is_final_fragment(context->wsi)) {
-				lws_close_reason(wsi, LWS_CLOSE_STATUS_NORMAL, (unsigned char *)"seeya", 5);
-				return -1;
-			}
             break;
+
         case LWS_CALLBACK_CLIENT_CONNECTION_ERROR:
-			switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_ERROR, "Websocket connection error\n");
+			switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_ERROR, "Websocket ASR connection error\n");
 			context->wc_error = TRUE;
 			return -1;
 		    break;        
 		case LWS_CALLBACK_CLIENT_CLOSED:
-			switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_WARNING, "Websocket client connection closed.\n");
+			switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_WARNING, "Websocket ASR client connection closed.\n");
 			context->started = WS_STATE_DESTROY;
+			
 			return -1;
 		    break;    
         default:
@@ -278,24 +278,27 @@ void ws_asr_thread_launch(whisper_t *tech_pvt, switch_memory_pool_t *pool)
 
 // thread for handling websocket connection
 void *SWITCH_THREAD_FUNC ws_asr_thread_run(switch_thread_t *thread, void *obj) {
-	//int n;
+	int n;
 	whisper_t *context = (whisper_t *) obj;
 
 	do {
-		lws_service(context->lws_context, WS_TIMEOUT_MS);
+		n = lws_service(context->lws_context, WS_TIMEOUT_MS);
 	} while (context->started == WS_STATE_STARTED);
+
+	switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_CRIT, "Exiting ASR lws_service thread! %d \n", n);
 
 	return NULL;
 }
 
 void ws_asr_close_connection(whisper_t *tech_pvt) {
 	whisper_t *context = (whisper_t *) tech_pvt;
+	
 	lws_cancel_service(context->lws_context);
+	lws_close_reason(context->wsi, LWS_CLOSE_STATUS_NORMAL, (unsigned char *)"seeya", 5);
+	
 	context->started = WS_STATE_DESTROY;
 	lws_context_destroy(context->lws_context);
 }
-
-
 
 switch_status_t ws_send_binary(struct lws *websocket, void *data, int rlen) 
 {	
