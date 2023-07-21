@@ -157,6 +157,7 @@ void *SWITCH_THREAD_FUNC ws_tts_thread_run(switch_thread_t *thread, void *obj) {
 
 void ws_tts_close_connection(whisper_tts_t *tech_pvt) {
 	whisper_tts_t *context = (whisper_tts_t *) tech_pvt;
+
 	lws_cancel_service(context->lws_context);
 	context->started = WS_STATE_DESTROY;
 	lws_context_destroy(context->lws_context);
@@ -188,9 +189,8 @@ int callback_ws_asr(struct lws *wsi, enum lws_callback_reasons reason, void *use
 			context->wc_error = TRUE;
 			return -1;
 		    break;        
-		case LWS_CALLBACK_CLIENT_CLOSED:
-			switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_WARNING, "Websocket ASR client connection closed.\n");
-			context->started = WS_STATE_DESTROY;
+		case LWS_CALLBACK_CLIENT_CLOSED:	
+			switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_WARNING, "Websocket ASR client connection closed. %d\n", context->started);
 			return -1;
 		    break;    
         default:
@@ -277,26 +277,25 @@ void ws_asr_thread_launch(whisper_t *tech_pvt, switch_memory_pool_t *pool)
 
 // thread for handling websocket connection
 void *SWITCH_THREAD_FUNC ws_asr_thread_run(switch_thread_t *thread, void *obj) {
-	int n;
 	whisper_t *context = (whisper_t *) obj;
-
-	do {
+	int n; 
+	while (context->started == WS_STATE_STARTED && n >= 0) {
 		n = lws_service(context->lws_context, WS_TIMEOUT_MS);
-	} while (context->started == WS_STATE_STARTED);
-
-	switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_CRIT, "Exiting ASR lws_service thread! %d \n", n);
-
+	}
+	
+	lws_context_destroy(context->lws_context);
+	switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_CRIT, "Exiting ASR lws_service thread!\n");
 	return NULL;
 }
 
 void ws_asr_close_connection(whisper_t *tech_pvt) {
 	whisper_t *context = (whisper_t *) tech_pvt;
-	
-	lws_cancel_service(context->lws_context);
-	lws_close_reason(context->wsi, LWS_CLOSE_STATUS_NORMAL, (unsigned char *)"seeya", 5);
-	
+
+
 	context->started = WS_STATE_DESTROY;
-	lws_context_destroy(context->lws_context);
+	
+	lws_cancel_service(context->lws_context);	
+	
 }
 
 switch_status_t ws_send_binary(struct lws *websocket, void *data, int rlen) 
@@ -308,12 +307,11 @@ switch_status_t ws_send_binary(struct lws *websocket, void *data, int rlen)
 	memcpy(p, data, rlen);
 
 	if (lws_write(websocket, p, rlen, LWS_WRITE_BINARY) < 0) {
-		switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_CRIT, "Unable to write message\n");
+		switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_CRIT, "Unable to write message \n");
 		return SWITCH_STATUS_BREAK;
 	}		
 	return SWITCH_STATUS_SUCCESS;
 }
-
 
 switch_status_t ws_send_text(struct lws *websocket, char *text) 
 {

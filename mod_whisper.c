@@ -44,6 +44,8 @@ SWITCH_MODULE_SHUTDOWN_FUNCTION(mod_whisper_shutdown);
 SWITCH_MODULE_RUNTIME_FUNCTION(mod_whisper_runtime);
 SWITCH_MODULE_DEFINITION(mod_whisper, mod_whisper_load, mod_whisper_shutdown, mod_whisper_runtime);
 
+/* ASR interface */ 
+
 static void whisper_reset_vad(whisper_t *context)
 {
 	if (context->vad) {
@@ -160,6 +162,13 @@ static switch_status_t whisper_close(switch_asr_handle_t *ah, switch_asr_flag_t 
 	whisper_t *context = (whisper_t *)ah->private_info;
 	switch_status_t status = SWITCH_STATUS_SUCCESS;
 
+	switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "ASR close!\n");
+	if (switch_test_flag(ah, SWITCH_ASR_FLAG_CLOSED)) {
+		switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "Double ASR close!\n");
+		return SWITCH_STATUS_FALSE;
+	}
+
+
 	ws_asr_close_connection(context);
 
 	switch_mutex_lock(context->mutex);
@@ -169,10 +178,6 @@ static switch_status_t whisper_close(switch_asr_handle_t *ah, switch_asr_flag_t 
 	switch_mutex_unlock(context->mutex);
 
 
-	if (switch_test_flag(ah, SWITCH_ASR_FLAG_CLOSED)) {
-		switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "Double ASR close!\n");
-		return SWITCH_STATUS_FALSE;
-	}
 
 	if (context->vad) {
 		switch_vad_destroy(&context->vad);
@@ -461,6 +466,8 @@ static void whisper_text_param(switch_asr_handle_t *ah, char *param, const char 
 	}
 }
 
+/* TTS Interface */
+
 static switch_status_t whisper_speech_open(switch_speech_handle_t *sh, const char *voice_name, int rate, int channels, switch_speech_flag_t *flags)
 {
 	whisper_tts_t *context = switch_core_alloc(sh->memory_pool, sizeof(whisper_tts_t));
@@ -475,6 +482,7 @@ static switch_status_t whisper_speech_open(switch_speech_handle_t *sh, const cha
 		session_uuid = switch_core_session_get_uuid(session);
 	}
 	
+	switch_log_printf(SWITCH_CHANNEL_UUID_LOG(context->channel_uuid), SWITCH_LOG_DEBUG, "session-uuid = %s\n", session_uuid);
 	switch_event_create_subclass(&event, SWITCH_EVENT_CUSTOM, "whisper::tts_open");
 	switch_event_add_header_string(event, SWITCH_STACK_BOTTOM, "WHISPER-voice", voice_name);
 	switch_event_add_header_string(event, SWITCH_STACK_BOTTOM, "WHISPER-uuid", session_uuid);
