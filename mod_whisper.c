@@ -168,22 +168,18 @@ static switch_status_t whisper_close(switch_asr_handle_t *ah, switch_asr_flag_t 
 		return SWITCH_STATUS_FALSE;
 	}
 
-
-	ws_asr_close_connection(context);
-
 	switch_mutex_lock(context->mutex);
-
-	//switch_set_flag(ah, SWITCH_ASR_FLAG_CLOSED);
-	switch_buffer_destroy(&context->audio_buffer);
-	switch_mutex_unlock(context->mutex);
-
-
+	ws_asr_close_connection(context);
 
 	if (context->vad) {
 		switch_vad_destroy(&context->vad);
 	}
 
+	
+	switch_buffer_destroy(&context->audio_buffer);
 	switch_set_flag(ah, SWITCH_ASR_FLAG_CLOSED);
+	
+	switch_mutex_unlock(context->mutex);
 	return status;
 }
 
@@ -202,6 +198,8 @@ static switch_status_t whisper_feed(switch_asr_handle_t *ah, void *data, unsigne
 		whisper_reset_vad(context);
 	}
 
+	switch_mutex_lock(context->mutex);
+	
 	if (switch_test_flag(context, ASRFLAG_READY)) {
 
 		vad_state = switch_vad_process(context->vad, (int16_t *)data, len / sizeof(uint16_t));
@@ -210,7 +208,7 @@ static switch_status_t whisper_feed(switch_asr_handle_t *ah, void *data, unsigne
 
 			char buf[AUDIO_BLOCK_SIZE];
 
-			switch_mutex_lock(context->mutex);
+			
 			switch_buffer_write(context->audio_buffer, data, len);
 
 			if (switch_buffer_inuse(context->audio_buffer) > AUDIO_BLOCK_SIZE) {
@@ -223,7 +221,6 @@ static switch_status_t whisper_feed(switch_asr_handle_t *ah, void *data, unsigne
 				}
 			} 
 
-			switch_mutex_unlock(context->mutex);
 		}
 
 		if (vad_state == SWITCH_VAD_STATE_STOP_TALKING || switch_test_flag(context, ASRFLAG_TIMEOUT)) {
@@ -249,14 +246,16 @@ static switch_status_t whisper_feed(switch_asr_handle_t *ah, void *data, unsigne
 			
 			if (ws_status != SWITCH_STATUS_SUCCESS) {
 				switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "Sendig data for transcription failed\n");
+
+				switch_mutex_unlock(context->mutex);
+
 				return SWITCH_STATUS_BREAK;
 			}
-				
+			
 			// set vad flags to stop detection
 			switch_set_flag(context, ASRFLAG_RESULT_PENDING);
 			switch_vad_reset(context->vad);
 			switch_clear_flag(context, ASRFLAG_READY);
-
 		} else if (vad_state == SWITCH_VAD_STATE_START_TALKING) {
 			
 			switch_event_t *event = NULL;
@@ -271,17 +270,13 @@ static switch_status_t whisper_feed(switch_asr_handle_t *ah, void *data, unsigne
 			}
 			switch_event_fire(&event);
 
+
 			switch_set_flag(context, ASRFLAG_START_OF_SPEECH);
 			context->speech_time = switch_micro_time_now();
 		}
 	}
 
-	if (switch_test_flag(context, ASRFLAG_RESULT_PENDING)) {
-		while (!switch_test_flag(context, ASRFLAG_RESULT_READY)) {
-			//switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "Going to sleep for sometime %s \n", context->result_text);
-			switch_sleep(100000);
-		}
-	}
+	switch_mutex_unlock(context->mutex);
 	
 	return SWITCH_STATUS_SUCCESS;
 }
@@ -296,7 +291,11 @@ static switch_status_t whisper_pause(switch_asr_handle_t *ah)
 	}
 
 	switch_log_printf(SWITCH_CHANNEL_UUID_LOG(context->channel_uuid), SWITCH_LOG_DEBUG, "Pausing\n");
+
+	switch_mutex_lock(context->mutex);
 	context->flags = 0;
+
+	switch_mutex_unlock(context->mutex);
 
 	return SWITCH_STATUS_SUCCESS;
 }
@@ -319,6 +318,11 @@ static switch_status_t whisper_resume(switch_asr_handle_t *ah)
 static switch_status_t whisper_check_results(switch_asr_handle_t *ah, switch_asr_flag_t *flags)
 {
 	whisper_t *context = (whisper_t *) ah->private_info;
+
+	if (switch_test_flag(context, ASRFLAG_RESULT_PENDING)) {
+		return SWITCH_STATUS_BREAK;
+	}
+		
 
 	if (switch_test_flag(context, ASRFLAG_RETURNED_RESULT) || switch_test_flag(ah, SWITCH_ASR_FLAG_CLOSED)) {
 		return SWITCH_STATUS_BREAK;
