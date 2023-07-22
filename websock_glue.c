@@ -179,14 +179,21 @@ int callback_ws_asr(struct lws *wsi, enum lws_callback_reasons reason, void *use
 				switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_WARNING, "Text: %s \n", (char *)in);
 				context->result_text = switch_safe_strdup((const char *)in); 
 			}
+
+			switch_mutex_lock(context->mutex);
+
 			switch_set_flag(context, ASRFLAG_RESULT_READY);
 			switch_clear_flag(context, ASRFLAG_RESULT_PENDING);
-
+			
+			switch_mutex_unlock(context->mutex);
+			
             break;
 
         case LWS_CALLBACK_CLIENT_CONNECTION_ERROR:
 			switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_ERROR, "Websocket ASR connection error\n");
+			switch_mutex_lock(context->mutex);
 			context->wc_error = TRUE;
+			switch_mutex_unlock(context->mutex);
 			return -1;
 		    break;        
 		case LWS_CALLBACK_CLIENT_CLOSED:	
@@ -214,7 +221,11 @@ switch_status_t ws_asr_setup_connection(char * asr_server_uri, whisper_t *tech_p
 
 	lws_set_log_level(logs, NULL);
 
+	switch_mutex_lock(context->mutex);
+
 	context->lws_context = lws_create_context(&context->lws_info);
+	
+	switch_mutex_unlock(context->mutex);
 
 	if (context->lws_context == NULL) {
 			switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_CRIT, "Creating libwebsocket context failed\n");
@@ -235,7 +246,7 @@ switch_status_t ws_asr_setup_connection(char * asr_server_uri, whisper_t *tech_p
 	} else {
 		context->lws_ccinfo.ssl_connection = 2;
 	}
-	
+	switch_mutex_lock(context->mutex);
     context->lws_ccinfo.context = context->lws_context;
     context->lws_ccinfo.host = lws_canonical_hostname(context->lws_context);
     context->lws_ccinfo.origin = "origin";
@@ -243,6 +254,8 @@ switch_status_t ws_asr_setup_connection(char * asr_server_uri, whisper_t *tech_p
     context->lws_ccinfo.protocol = ws_asr_protocols[0].name;
 
     context->wsi = lws_client_connect_via_info(&context->lws_ccinfo);
+
+	switch_mutex_unlock(context->mutex);
 
     if (context->wsi == NULL) {
 			switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_CRIT, "Websocket setup failed\n");
@@ -282,7 +295,7 @@ void *SWITCH_THREAD_FUNC ws_asr_thread_run(switch_thread_t *thread, void *obj) {
 	while (context->started == WS_STATE_STARTED && n >= 0) {
 		n = lws_service(context->lws_context, WS_TIMEOUT_MS);
 	}
-	
+
 	lws_context_destroy(context->lws_context);
 	switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_CRIT, "Exiting ASR lws_service thread!\n");
 	return NULL;
@@ -291,9 +304,8 @@ void *SWITCH_THREAD_FUNC ws_asr_thread_run(switch_thread_t *thread, void *obj) {
 void ws_asr_close_connection(whisper_t *tech_pvt) {
 	whisper_t *context = (whisper_t *) tech_pvt;
 
-
 	context->started = WS_STATE_DESTROY;
-	
+
 	lws_cancel_service(context->lws_context);	
 	
 }
