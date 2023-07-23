@@ -20,6 +20,7 @@ switch_status_t ws_send_binary(struct lws *websocket, void *data, int rlen);
 switch_status_t ws_send_text(struct lws *websocket, char *text) ;
 switch_status_t ws_send_json(struct lws *websocket, ks_json_t *json_object) ;
 switch_status_t whisper_get_final_transcription(whisper_t *context);
+void whisper_fire_event(whisper_t *context, char * event_subclass);
 switch_status_t whisper_get_speech_synthesis(whisper_tts_t *context);
 
 #endif
