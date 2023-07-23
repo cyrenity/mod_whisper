@@ -99,6 +99,7 @@ static switch_status_t whisper_open(switch_asr_handle_t *ah, const char *codec, 
 	status = ws_asr_setup_connection(asr_server, context, whisper_globals.pool);
 
 	if (status != SWITCH_STATUS_SUCCESS) {
+		whisper_fire_event(context, "whisper::asr_connection_error");
 		ws_asr_close_connection(context);
 		return status;
 	}
@@ -208,12 +209,17 @@ static switch_status_t whisper_feed(switch_asr_handle_t *ah, void *data, unsigne
 
 			char buf[AUDIO_BLOCK_SIZE];
 
-			
 			switch_buffer_write(context->audio_buffer, data, len);
 
 			if (switch_buffer_inuse(context->audio_buffer) > AUDIO_BLOCK_SIZE) {
 				rlen = switch_buffer_read(context->audio_buffer, buf, AUDIO_BLOCK_SIZE);
-				switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "Sending data %d\n", rlen);
+				switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "Sending data %d %d\n", rlen, context->started);
+	
+				if (context->started != WS_STATE_STARTED) {
+					whisper_fire_event(context, "whisper::asr_connection_error");
+					switch_mutex_unlock(context->mutex);
+					return SWITCH_STATUS_BREAK; 
+				}
 
 				if (ws_send_binary(context->wsi, buf, rlen) != SWITCH_STATUS_SUCCESS) {
 					switch_mutex_unlock(context->mutex);
@@ -225,22 +231,8 @@ static switch_status_t whisper_feed(switch_asr_handle_t *ah, void *data, unsigne
 
 		if (vad_state == SWITCH_VAD_STATE_STOP_TALKING || switch_test_flag(context, ASRFLAG_TIMEOUT)) {
 			switch_status_t ws_status;
-			switch_event_t *event = NULL;
-			switch_core_session_t *session;
-			switch_channel_t *channel;
-			switch_event_create_subclass(&event, SWITCH_EVENT_CUSTOM, "whisper::asr_stop_talking");
-			session = switch_core_session_locate(context->channel_uuid);
-			if (session) {
-				channel = switch_core_session_get_channel(session);
-				switch_channel_event_set_data(channel, event);
-				switch_core_session_rwunlock(session);
-			}
 
-			if (switch_test_flag(context, ASRFLAG_TIMEOUT)) {
-				switch_event_add_header_string(event, SWITCH_STACK_BOTTOM, "Stop-Reason", "timeout");
-			}
-
-			switch_event_fire(&event);
+			whisper_fire_event(context, "whisper::asr_stop_talking");
 
 			ws_status = whisper_get_final_transcription(context);
 			
@@ -258,18 +250,7 @@ static switch_status_t whisper_feed(switch_asr_handle_t *ah, void *data, unsigne
 			switch_clear_flag(context, ASRFLAG_READY);
 		} else if (vad_state == SWITCH_VAD_STATE_START_TALKING) {
 			
-			switch_event_t *event = NULL;
-			switch_core_session_t *session;
-			switch_channel_t *channel;
-			switch_event_create_subclass(&event, SWITCH_EVENT_CUSTOM, "whisper::asr_start_talking");
-			session = switch_core_session_locate(context->channel_uuid);
-			if (session) {
-				channel = switch_core_session_get_channel(session);
-				switch_channel_event_set_data(channel, event);
-				switch_core_session_rwunlock(session);
-			}
-			switch_event_fire(&event);
-
+			whisper_fire_event(context, "whisper::asr_start_talking");
 
 			switch_set_flag(context, ASRFLAG_START_OF_SPEECH);
 			context->speech_time = switch_micro_time_now();

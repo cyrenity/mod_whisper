@@ -167,8 +167,10 @@ void ws_tts_close_connection(whisper_tts_t *tech_pvt) {
 int callback_ws_asr(struct lws *wsi, enum lws_callback_reasons reason, void *user, void *in, size_t len)
 {
 	whisper_t *context = (whisper_t *)lws_wsi_user(wsi);
-
-    switch (reason) {
+	
+	// switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "WebSockets CB ->. [%d]\n", reason);
+    
+	switch (reason) {
         case LWS_CALLBACK_CLIENT_ESTABLISHED:
 			switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "WebSockets ASR client established. [%p]\n", (void *)wsi);
 			context->wc_connected = TRUE;
@@ -198,6 +200,10 @@ int callback_ws_asr(struct lws *wsi, enum lws_callback_reasons reason, void *use
 		    break;        
 		case LWS_CALLBACK_CLIENT_CLOSED:	
 			switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_WARNING, "Websocket ASR client connection closed. %d\n", context->started);
+			switch_mutex_lock(context->mutex);
+			context->started = WS_STATE_DESTROY;
+			//context->wc_connected = TRUE;
+			switch_mutex_unlock(context->mutex);			
 			return -1;
 		    break;    
         default:
@@ -392,4 +398,23 @@ switch_status_t whisper_get_speech_synthesis(whisper_tts_t *context)
 	}
 
 	return SWITCH_STATUS_SUCCESS;
+}
+
+void whisper_fire_event(whisper_t *context, char * event_subclass) {
+			switch_event_t *event = NULL;
+			switch_core_session_t *session;
+			switch_channel_t *channel;
+			switch_event_create_subclass(&event, SWITCH_EVENT_CUSTOM, event_subclass);
+			session = switch_core_session_locate(context->channel_uuid);
+			if (session) {
+				channel = switch_core_session_get_channel(session);
+				switch_channel_event_set_data(channel, event);
+				switch_core_session_rwunlock(session);
+			}
+
+			if (switch_test_flag(context, ASRFLAG_TIMEOUT)) {
+				switch_event_add_header_string(event, SWITCH_STACK_BOTTOM, "Stop-Reason", "timeout");
+			}
+
+			switch_event_fire(&event);	
 }
