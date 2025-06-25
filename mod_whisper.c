@@ -27,7 +27,7 @@
  * Ghulam Mustafa <mustafa.pk@gmail.com>
  *
  *
- * mod_whisper.c -- a general purpose module for trancribing audio using websockets
+ * mod_whisper.c -- a general purpose module for transcribing audio using websockets
  *
  */
 
@@ -237,7 +237,7 @@ static switch_status_t whisper_feed(switch_asr_handle_t *ah, void *data, unsigne
 			ws_status = whisper_get_final_transcription(context);
 			
 			if (ws_status != SWITCH_STATUS_SUCCESS) {
-				switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "Sendig data for transcription failed\n");
+                                switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "Sending data for transcription failed\n");
 
 				switch_mutex_unlock(context->mutex);
 
