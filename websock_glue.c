@@ -116,9 +116,10 @@ switch_status_t ws_tts_setup_connection(char * tts_server_uri, whisper_tts_t *te
     context->wsi = lws_client_connect_via_info(&context->lws_ccinfo);
 
     if (context->wsi == NULL) {
-			switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_CRIT, "Websocket setup failed\n");
-			return SWITCH_CAUSE_DESTINATION_OUT_OF_ORDER;
-	}
+                        switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_CRIT, "Websocket setup failed\n");
+                        lws_context_destroy(context->lws_context);
+                        return SWITCH_CAUSE_DESTINATION_OUT_OF_ORDER;
+        }
 
 	ws_tts_thread_launch(context, pool);
 
@@ -264,9 +265,10 @@ switch_status_t ws_asr_setup_connection(char * asr_server_uri, whisper_t *tech_p
 	switch_mutex_unlock(context->mutex);
 
     if (context->wsi == NULL) {
-			switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_CRIT, "Websocket setup failed\n");
-			return SWITCH_CAUSE_DESTINATION_OUT_OF_ORDER;
-	}
+                        switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_CRIT, "Websocket setup failed\n");
+                        lws_context_destroy(context->lws_context);
+                        return SWITCH_CAUSE_DESTINATION_OUT_OF_ORDER;
+        }
 
 	ws_asr_thread_launch(context, pool);
 
